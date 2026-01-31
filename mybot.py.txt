@@ -1,6 +1,7 @@
 import telebot
 import requests
 import os
+import yt_dlp
 from threading import Thread
 from flask import Flask
 
@@ -18,7 +19,7 @@ def keep_alive():
     t = Thread(target=run)
     t.start()
 
-# --- 2. إعدادات البوت بالتوكن الجديد الحصري ---
+# --- 2. إعدادات البوت ---
 TOKEN = '8292214871:AAHSXs7jK95MQQVtQ1Sc4TCSNbMDuuE8h-w'
 ADMIN_ID = 8286321204 
 MY_RIGHTS = "@1.3vv"
@@ -26,8 +27,8 @@ MY_RIGHTS = "@1.3vv"
 bot = telebot.TeleBot(TOKEN)
 users = set()
 
-# دالة جلب البيانات من API
-def get_data(url):
+# دالة جلب بيانات تيك توك
+def get_tiktok_data(url):
     try:
         api_url = f"https://www.tikwm.com/api/?url={url}"
         res = requests.get(api_url, timeout=15).json()
@@ -37,11 +38,26 @@ def get_data(url):
     except:
         return None
 
+# دالة جلب بيانات يوتيوب
+def get_youtube_data(url, mode):
+    # mode 'v' للـ فيديو و 'a' للـ صوت
+    try:
+        ydl_opts = {
+            'format': 'bestvideo+bestaudio/best' if mode == 'v' else 'bestaudio/best',
+            'quiet': True,
+            'no_warnings': True,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            return info['url']
+    except:
+        return None
+
 # --- 3. الأوامر ---
 @bot.message_handler(commands=['start'])
 def start(message):
     users.add(message.chat.id)
-    bot.reply_to(message, f"أهلاً بك {message.from_user.first_name} 👋\nأرسل رابط تيك توك وسأحمله لك فوراً!")
+    bot.reply_to(message, f"أهلاً بك {message.from_user.first_name} 👋\nأرسل رابط تيك توك أو يوتيوب وسأحمله لك!")
 
 @bot.message_handler(commands=['admin'])
 def admin(message):
@@ -51,33 +67,60 @@ def admin(message):
         markup.add(btn)
         bot.reply_to(message, f"📊 عدد المستخدمين: {len(users)}", reply_markup=markup)
 
-# --- 4. التحميل ---
-@bot.message_handler(func=lambda m: "tiktok.com" in m.text)
-def handle_download(message):
+# --- 4. معالجة الروابط (تيك توك ويوتيوب) ---
+@bot.message_handler(func=lambda m: True)
+def handle_links(message):
     url = message.text.strip()
-    wait_msg = bot.reply_to(message, "⏳ جاري المعالجة...")
-    data = get_data(url)
-    if data:
+    
+    if "tiktok.com" in url:
+        wait_msg = bot.reply_to(message, "⏳ جاري معالجة تيك توك...")
+        data = get_tiktok_data(url)
+        if data:
+            markup = telebot.types.InlineKeyboardMarkup()
+            markup.add(
+                telebot.types.InlineKeyboardButton("🎬 فيديو", callback_data=f"tv_{url}"),
+                telebot.types.InlineKeyboardButton("🎵 صوت", callback_data=f"ta_{url}")
+            )
+            bot.edit_message_text("✅ تيك توك - اختر النوع:", message.chat.id, wait_msg.message_id, reply_markup=markup)
+        else:
+            bot.edit_message_text("❌ فشل جلب بيانات تيك توك.", message.chat.id, wait_msg.message_id)
+
+    elif "youtube.com" in url or "youtu.be" in url:
+        wait_msg = bot.reply_to(message, "⏳ جاري معالجة يوتيوب...")
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(
-            telebot.types.InlineKeyboardButton("🎬 فيديو", callback_data=f"v_{url}"),
-            telebot.types.InlineKeyboardButton("🎵 صوت", callback_data=f"a_{url}")
+            telebot.types.InlineKeyboardButton("🎬 فيديو يوتيوب", callback_data=f"yv_{url}"),
+            telebot.types.InlineKeyboardButton("🎵 صوت يوتيوب", callback_data=f"ya_{url}")
         )
-        bot.edit_message_text("✅ اختر النوع:", message.chat.id, wait_msg.message_id, reply_markup=markup)
-    else:
-        bot.edit_message_text("❌ فشل الجلب.", message.chat.id, wait_msg.message_id)
+        bot.edit_message_text("✅ يوتيوب - اختر النوع:", message.chat.id, wait_msg.message_id, reply_markup=markup)
 
+# --- 5. التنفيذ (Callback) ---
 @bot.callback_query_handler(func=lambda call: True)
 def callback(call):
-    if call.data.startswith("v_"):
-        data = get_data(call.data[2:])
-        if data: bot.send_video(call.message.chat.id, data['play'], caption=MY_RIGHTS)
-    elif call.data.startswith("a_"):
-        data = get_data(call.data[2:])
-        if data: bot.send_audio(call.message.chat.id, data['music'], caption=MY_RIGHTS)
+    chat_id = call.message.chat.id
+    url = call.data[3:] # استخراج الرابط من الـ callback
+    
+    # معالجة تيك توك
+    if call.data.startswith("tv_"):
+        data = get_tiktok_data(url)
+        if data: bot.send_video(chat_id, data['play'], caption=MY_RIGHTS)
+    elif call.data.startswith("ta_"):
+        data = get_tiktok_data(url)
+        if data: bot.send_audio(chat_id, data['music'], caption=MY_RIGHTS)
+        
+    # معالجة يوتيوب
+    elif call.data.startswith("yv_"):
+        video_url = get_youtube_data(url, 'v')
+        if video_url: bot.send_video(chat_id, video_url, caption=MY_RIGHTS)
+        else: bot.send_message(chat_id, "❌ حدث خطأ في تحميل فيديو يوتيوب")
+        
+    elif call.data.startswith("ya_"):
+        audio_url = get_youtube_data(url, 'a')
+        if audio_url: bot.send_audio(chat_id, audio_url, caption=MY_RIGHTS)
+        else: bot.send_message(chat_id, "❌ حدث خطأ في تحميل صوت يوتيوب")
 
-# --- 5. التشغيل ---
+# --- 6. التشغيل ---
 if __name__ == "__main__":
     keep_alive()
-    print("🚀 البوت انطلق بالتوكن الجديد...")
+    print("🚀 البوت المطور يعمل الآن (يوتيوب + تيك توك)")
     bot.infinity_polling(skip_pending=True)
