@@ -1,47 +1,78 @@
+import telebot
+import requests
+import os
+from threading import Thread
+from flask import Flask
 from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
 
-# --- 3. معالجة الفيديو: قص وإخفاء العلامة المائية ---
+# --- 1. سيرفر الوهمي لـ Render ---
+app = Flask('')
+@app.route('/')
+def home(): return "Bot is Live!"
+def run(): app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+def keep_alive(): Thread(target=run).start()
+
+# --- 2. الإعدادات ---
+TOKEN = '8292214871:AAHSXs7jK95MQQVtQ1Sc4TCSNbMDuuE8h-w'
+MY_RIGHTS = "@1.3vv"
+bot = telebot.TeleBot(TOKEN)
+
+def get_data(url):
+    try:
+        api_url = f"https://www.tikwm.com/api/?url={url}"
+        res = requests.get(api_url, timeout=15).json()
+        return res['data'] if res.get('code') == 0 else None
+    except: return None
+
+# --- 3. ميزة القص وإخفاء العلامة المائية للفيديوهات المرفوعة ---
 @bot.message_handler(content_types=['video'])
 def handle_uploaded_video(message):
     try:
-        wait_msg = bot.reply_to(message, "⏳ جاري معالجة الفيديو وإزالة العلامات المائية...")
+        wait_msg = bot.reply_to(message, "⏳ جاري قص أطراف الفيديو وإضافة بصمتك...")
         
-        # تحميل الفيديو من تليجرام
         file_info = bot.get_file(message.video.file_id)
         downloaded_file = bot.download_file(file_info.file_path)
-        input_path = "input_temp.mp4"
-        output_path = "output_clean.mp4"
         
-        with open(input_path, 'wb') as f:
-            f.write(downloaded_file)
+        input_path = "in.mp4"
+        output_path = "out.mp4"
+        
+        with open(input_path, 'wb') as f: f.write(downloaded_file)
 
-        # تحميل الفيديو للمعالجة
+        # المعالجة
         clip = VideoFileClip(input_path)
         w, h = clip.size
 
-        # 1. عملية القص (Crop): إزالة 10% من أعلى وأسفل الفيديو (أماكن الشعارات الشائعة)
-        # يمكنك تعديل القيم (y1, y2) حسب الحاجة
-        clipped_video = clip.crop(y1=60, y2=h-60) 
+        # عملية القص (إزالة 10% من الأعلى والأسفل)
+        # هذا يخفي معظم العلامات المائية المتحركة
+        clipped = clip.crop(y1=h*0.1, y2=h*0.9) 
 
-        # 2. إضافة بصمتك @1.3vv لإخفاء أي بقايا أو لتوثيق الفيديو
-        txt_clip = TextClip(MY_RIGHTS, fontsize=35, color='white', font='Arial-Bold')
-        # وضع الحقوق في الزاوية اليمنى العليا
-        txt_clip = txt_clip.set_position(('right', 'top')).set_duration(clip.duration).margin(right=15, top=15, opacity=0)
+        # إضافة بصمتك فوق الفيديو
+        txt = TextClip(MY_RIGHTS, fontsize=30, color='white', font='Arial-Bold').set_duration(clip.duration).set_position(("right", "top")).margin(right=10, top=10, opacity=0)
 
-        # دمج الفيديو المقصوص مع الحقوق
-        final_video = CompositeVideoClip([clipped_video, txt_clip])
-        final_video.write_videofile(output_path, codec="libx264", audio_codec="aac", threads=4)
+        final = CompositeVideoClip([clipped, txt])
+        final.write_videofile(output_path, codec="libx264", audio_codec="aac")
 
-        # إرسال النتيجة
         with open(output_path, 'rb') as v:
-            bot.send_video(message.chat.id, v, caption=f"✅ تمت الإزالة والإضافة بواسطة: {MY_RIGHTS}")
+            bot.send_video(message.chat.id, v, caption=f"تم التنظيف والحفظ بواسطة {MY_RIGHTS}")
 
-        # تنظيف الذاكرة والملفات
+        # تنظيف
         clip.close()
-        final_video.close()
+        final.close()
         os.remove(input_path)
         os.remove(output_path)
         bot.delete_message(message.chat.id, wait_msg.message_id)
-
     except Exception as e:
-        bot.reply_to(message, f"❌ حدث خطأ: {str(e)}\nتأكد من تثبيت moviepy")
+        bot.reply_to(message, f"❌ حدث خطأ: {e}")
+
+# --- 4. التحميل من روابط تيك توك ---
+@bot.message_handler(func=lambda m: m.text and "tiktok.com" in m.text)
+def handle_link(message):
+    data = get_data(message.text.strip())
+    if data:
+        bot.send_video(message.chat.id, data['play'], caption=f"تم التحميل بدون علامة مائية ✅\n{MY_RIGHTS}")
+    else:
+        bot.reply_to(message, "❌ فشل التحميل")
+
+if __name__ == "__main__":
+    keep_alive()
+    bot.infinity_polling()
